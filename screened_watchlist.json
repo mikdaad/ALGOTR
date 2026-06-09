@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-06-09T23:28:15.646400+05:30",
+  "count": 15,
+  "stocks": [
+    {
+      "symbol": "GMRAIRPORT",
+      "token": 3463169
+    },
+    {
+      "symbol": "CANBK",
+      "token": 2763265
+    },
+    {
+      "symbol": "PNB",
+      "token": 2730497
+    },
+    {
+      "symbol": "FEDERALBNK",
+      "token": 261889
+    },
+    {
+      "symbol": "RBLBANK",
+      "token": 4708097
+    },
+    {
+      "symbol": "BANKBARODA",
+      "token": 1195009
+    },
+    {
+      "symbol": "VOLTAS",
+      "token": 951809
+    },
+    {
+      "symbol": "TITAN",
+      "token": 897537
+    },
+    {
+      "symbol": "APOLLOHOSP",
+      "token": 40193
+    },
+    {
+      "symbol": "RECLTD",
+      "token": 3930881
+    },
+    {
+      "symbol": "CIPLA",
+      "token": 177665
+    },
+    {
+      "symbol": "BANDHANBNK",
+      "token": 579329
+    },
+    {
+      "symbol": "UNIONBANK",
+      "token": 2752769
+    },
+    {
+      "symbol": "AXISBANK",
+      "token": 1510401
+    },
+    {
+      "symbol": "SBIN",
+      "token": 779521
+    }
+  ]
+}
