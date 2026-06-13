@@ -5,17 +5,19 @@ applications:
       phases:
         preBuild:
           commands:
-            # Ensure Node 20 LTS is active (required for Next.js 16.x)
-            - nvm use --lts || nvm install 20
+            # 1. Force exact Node 20 (bypasses the Node 22 LTS issue)
+            - nvm install 20
+            - nvm use 20
             - node --version
             - npm --version
-            # Use npm ci for deterministic, reproducible builds from lock file
-            - npm ci
+            # 2. Use 'npm install' to completely bypass lockfile crash loops
+            - npm install
         build:
           commands:
             - npm run build
       artifacts:
-        baseDirectory: out
+        # Next.js App Router (SSR) output
+        baseDirectory: .next
         files:
           - '**/*'
       cache:
