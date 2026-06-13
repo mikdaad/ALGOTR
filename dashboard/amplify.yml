@@ -1,0 +1,24 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        # Ensure Node 20 LTS is active (required for Next.js 16.x)
+        - nvm use --lts || nvm install 20
+        - node --version
+        - npm --version
+        # Use npm ci for deterministic, reproducible builds from lock file
+        - npm ci
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    # Next.js App Router (SSR) output — Amplify reads from .next automatically
+    baseDirectory: .next
+    files:
+      - "**/*"
+  cache:
+    paths:
+      # Caching these dramatically reduces build time on subsequent deploys
+      - node_modules/**/*
+      - .next/cache/**/*

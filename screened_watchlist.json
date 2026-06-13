@@ -1,66 +1,81 @@
 {
-  "generated_at": "2026-06-09T23:28:15.646400+05:30",
+  "generated_at": "2026-06-12T09:00:38.507272+05:30",
   "count": 15,
   "stocks": [
     {
-      "symbol": "GMRAIRPORT",
-      "token": 3463169
+      "symbol": "WIPRO",
+      "token": 969473,
+      "trend": "BELOW"
     },
     {
-      "symbol": "CANBK",
-      "token": 2763265
+      "symbol": "FORTIS",
+      "token": 3735553,
+      "trend": "ABOVE"
     },
     {
-      "symbol": "PNB",
-      "token": 2730497
+      "symbol": "BEL",
+      "token": 98049,
+      "trend": "BELOW"
     },
     {
-      "symbol": "FEDERALBNK",
-      "token": 261889
+      "symbol": "ATGL",
+      "token": 1552897,
+      "trend": "ABOVE"
     },
     {
-      "symbol": "RBLBANK",
-      "token": 4708097
+      "symbol": "TORNTPHARM",
+      "token": 900609,
+      "trend": "ABOVE"
     },
     {
-      "symbol": "BANKBARODA",
-      "token": 1195009
+      "symbol": "COALINDIA",
+      "token": 5215745,
+      "trend": "BELOW"
     },
     {
-      "symbol": "VOLTAS",
-      "token": 951809
-    },
-    {
-      "symbol": "TITAN",
-      "token": 897537
-    },
-    {
-      "symbol": "APOLLOHOSP",
-      "token": 40193
-    },
-    {
-      "symbol": "RECLTD",
-      "token": 3930881
-    },
-    {
-      "symbol": "CIPLA",
-      "token": 177665
+      "symbol": "HINDALCO",
+      "token": 348929,
+      "trend": "BELOW"
     },
     {
       "symbol": "BANDHANBNK",
-      "token": 579329
+      "token": 579329,
+      "trend": "BELOW"
     },
     {
-      "symbol": "UNIONBANK",
-      "token": 2752769
+      "symbol": "AMBUJACEM",
+      "token": 325121,
+      "trend": "BELOW"
     },
     {
-      "symbol": "AXISBANK",
-      "token": 1510401
+      "symbol": "ICICIPRULI",
+      "token": 4774913,
+      "trend": "BELOW"
     },
     {
-      "symbol": "SBIN",
-      "token": 779521
+      "symbol": "TVSMOTOR",
+      "token": 2170625,
+      "trend": "BELOW"
+    },
+    {
+      "symbol": "LT",
+      "token": 2939649,
+      "trend": "BELOW"
+    },
+    {
+      "symbol": "ADANIENT",
+      "token": 6401,
+      "trend": "ABOVE"
+    },
+    {
+      "symbol": "IEX",
+      "token": 56321,
+      "trend": "BELOW"
+    },
+    {
+      "symbol": "PFC",
+      "token": 3660545,
+      "trend": "BELOW"
     }
   ]
 }

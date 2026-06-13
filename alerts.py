@@ -1,14 +1,17 @@
 """
 ==================================================================================
-  PHASE 3 — Decoupled Alerting & Signal Logging (alerts.py) [v3]
+  PHASE 3+5 — Alerting, Logging & HITL Execution Gateway (alerts.py) [v4]
 ==================================================================================
   Handles all signal notifications:
     1. ANSI color-coded console alerts with WOBI metrics
     2. Telegram bot message with full diagnostics
     3. CSV file logging to triggered_signals.csv
     4. Database logging (optional, via db_logger)
+    5. Supabase dashboard push (returns row_id for HITL tracking)
+    6. HITL interactive Telegram approval (velocity signals only)
 
-  NO TRADES ARE EXECUTED. This is alert-only.
+  Breakout signals remain ALERT-ONLY.
+  Velocity signals are routed through the HITL gateway when enabled.
 ==================================================================================
 """
 
@@ -20,7 +23,13 @@ from typing import Union
 
 import pytz
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config import (
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    HITL_ENABLED,
+    VELOCITY_SCALP_TARGET,
+    VELOCITY_STOP_LOSS,
+)
 
 IST = pytz.timezone("Asia/Kolkata")
 CSV_LOG_FILE = "triggered_signals.csv"
@@ -30,8 +39,12 @@ _GREEN = "\033[92m"
 _RED = "\033[91m"
 _YELLOW = "\033[93m"
 _CYAN = "\033[96m"
+_MAGENTA = "\033[95m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
+_BLINK = "\033[5m"
+_BG_CYAN = "\033[46m"
+_BG_BLACK = "\033[40m"
 _RESET = "\033[0m"
 
 
@@ -92,6 +105,66 @@ def log_signal_to_csv(signal) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CSV VELOCITY SIGNAL LOGGER
+# ──────────────────────────────────────────────────────────────────────────────
+
+VELOCITY_CSV_LOG_FILE = "triggered_signals.csv"
+
+VELOCITY_CSV_COLUMNS = [
+    "Timestamp", "Symbol", "Direction", "Signal_Type", "Trigger_Price",
+    "Target_Price", "Stop_Loss", "WOBI_Ratio", "ATR_1m", "Volume_Ratio",
+    "Current_Vol", "Avg_Vol", "Consol_High", "Consol_Low",
+    "Bid_Qty", "Ask_Qty", "Trend", "Token",
+]
+
+
+def _ensure_velocity_csv_header():
+    """Create the velocity CSV file with headers if it doesn't exist."""
+    if not os.path.exists(VELOCITY_CSV_LOG_FILE):
+        with open(VELOCITY_CSV_LOG_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(VELOCITY_CSV_COLUMNS)
+
+
+def log_velocity_signal_to_csv(signal) -> None:
+    """
+    Append a velocity scalp signal to triggered_signals.csv.
+    Thread-safe: opens file in append mode per write (no shared handle).
+    """
+    _ensure_velocity_csv_header()
+
+    row = [
+        signal.timestamp.strftime("%Y-%m-%d %H:%M:%S") if hasattr(signal.timestamp, "strftime")
+            else str(signal.timestamp),
+        signal.symbol,
+        signal.direction,
+        signal.signal_type,
+        signal.trigger_price,
+        signal.target_price,
+        signal.stop_loss,
+        f"{signal.wobi:+.4f}",
+        f"{signal.atr_1m:.4f}",
+        f"{signal.volume_ratio:.2f}x",
+        signal.current_volume,
+        int(signal.avg_volume),
+        signal.consolidation_high,
+        signal.consolidation_low,
+        signal.total_bid_qty,
+        signal.total_ask_qty,
+        signal.trend,
+        signal.token,
+    ]
+
+    try:
+        with open(VELOCITY_CSV_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+        print(f"   📄 CSV: Velocity signal logged to {VELOCITY_CSV_LOG_FILE}")
+    except Exception as e:
+        print(f"   📄 CSV: ❌ Velocity write failed — {e}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # CONSOLE ALERTS — ANSI Color-Coded Breakout + WOBI Signals
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -124,6 +197,52 @@ def print_breakout_signal(signal) -> None:
     print(f"  {color}╠{border}╣{_RESET}")
     print(f"  {color}║{_RESET}  {_YELLOW}⚡ Execute manually on Groww — NO auto-trade ⚡{_RESET}".ljust(90) + f"{color}║{_RESET}")
     print(f"  {color}╚{border}╝{_RESET}")
+    print()
+
+
+def print_velocity_signal(signal) -> None:
+    """
+    Print a high-impact, flashing cyan ANSI console alert for a velocity scalp.
+    Distinct visual profile from the standard breakout alerts.
+    """
+    is_buy = signal.direction == "BUY"
+    color = _GREEN if is_buy else _RED
+    icon = "⚡" if is_buy else "💥"
+    dir_label = f"{color}{_BOLD}{signal.direction}{_RESET}"
+    obi_bar = _obi_bar(signal.wobi)
+    border = "═" * 72
+
+    # Risk-Reward visual
+    risk = abs(signal.trigger_price - signal.stop_loss)
+    reward = abs(signal.target_price - signal.trigger_price)
+    rr_label = f"1:{reward / risk:.1f}" if risk > 0 else "N/A"
+
+    print()
+    print(f"  {_BG_CYAN}{_BOLD} {'':^72} {_RESET}")
+    print(f"  {_CYAN}╔{border}╗{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  {icon}  {_BLINK}{_CYAN}{_BOLD}3-POINT {signal.direction} VELOCITY ALERT{_RESET}  {icon}".ljust(100) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╠{border}╣{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Ticker:           {_BOLD}{_CYAN}{signal.symbol}{_RESET}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Signal:           {_BOLD}{signal.signal_type}{_RESET}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╠{border}╣{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  {_BOLD}Entry Trigger:{_RESET}     {color}{_BOLD}₹{signal.trigger_price}{_RESET}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  {_GREEN}Scalp Target:{_RESET}      {_GREEN}{_BOLD}₹{signal.target_price}{_RESET}  (+₹{VELOCITY_SCALP_TARGET:.2f})".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  {_RED}Stop-Loss:{_RESET}         {_RED}{_BOLD}₹{signal.stop_loss}{_RESET}  (-₹{VELOCITY_STOP_LOSS:.2f})".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Risk:Reward:      {_BOLD}{rr_label}{_RESET}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╠{border}╣{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  WOBI Ratio:       {_BOLD}{signal.wobi:+.4f}{_RESET}  {obi_bar}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  1m ATR(20):       {signal.atr_1m:.4f} pts".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Volume Surge:     {_BOLD}{signal.volume_ratio:.2f}× avg{_RESET}  (curr={signal.current_volume:,} / avg={int(signal.avg_volume):,})".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Bid Qty:          {signal.total_bid_qty:,}".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Ask Qty:          {signal.total_ask_qty:,}".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Trend (EMA20):    {signal.trend}".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╠{border}╣{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Consol Range:     High=₹{signal.consolidation_high}  Low=₹{signal.consolidation_low}".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  Time:             {signal.timestamp}".ljust(86) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╠{border}╣{_RESET}")
+    print(f"  {_CYAN}║{_RESET}  {_YELLOW}{_BOLD}⚡ SCALP — Execute manually on Groww — NO auto-trade ⚡{_RESET}".ljust(94) + f"{_CYAN}║{_RESET}")
+    print(f"  {_CYAN}╚{border}╝{_RESET}")
+    print(f"  {_BG_CYAN}{_BOLD} {'':^72} {_RESET}")
     print()
 
 
@@ -227,7 +346,7 @@ def _format_legacy_telegram(signal) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# UNIFIED ALERT HANDLER
+# UNIFIED ALERT HANDLERS
 # ──────────────────────────────────────────────────────────────────────────────
 
 def handle_breakout_signal(signal) -> None:
@@ -235,7 +354,7 @@ def handle_breakout_signal(signal) -> None:
     Full alert pipeline for a single BreakoutSignal.
     Called as the on_signal callback from LiveBreakoutEngine.
 
-    Pipeline: Console → CSV → Telegram → Database
+    Pipeline: Console → CSV → Telegram → Database → Dashboard
     """
     # 1. Color-coded console alert
     print_breakout_signal(signal)
@@ -254,3 +373,142 @@ def handle_breakout_signal(signal) -> None:
         pass
     except Exception as e:
         print(f"   💾 DB: ❌ {e}")
+
+    # 5. Push to Supabase for live dashboard
+    try:
+        from supabase_bridge import push_breakout_to_dashboard
+        push_breakout_to_dashboard(signal)
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"   🌐 Dashboard: ❌ {e}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HITL BOT REGISTRATION
+# ──────────────────────────────────────────────────────────────────────────────
+# The HITLBot instance is registered here from main.py so the velocity
+# pipeline can dispatch interactive approval requests.
+
+_hitl_bot = None
+
+
+def register_hitl_bot(bot) -> None:
+    """Register the HITLBot instance for velocity signal approvals."""
+    global _hitl_bot
+    _hitl_bot = bot
+    print("   🤖 HITL Bot: Registered with alert pipeline")
+
+
+def handle_velocity_signal(signal) -> None:
+    """
+    Full alert pipeline for a VelocitySignal (3-point scalp).
+    Called as the on_velocity_signal callback from VelocityScanner.
+
+    Pipeline: Console → CSV → Telegram alert → Database → Dashboard → HITL
+
+    When HITL_ENABLED:
+      Steps 1-4 run as before (console, CSV, legacy Telegram, DB).
+      Step 5 pushes to Supabase and captures the row_id.
+      Step 6 sends an INTERACTIVE Telegram message with APPROVE/REJECT buttons.
+      The legacy Telegram alert (step 3) still fires as a notification.
+    """
+    # 1. High-impact flashing cyan console alert
+    print_velocity_signal(signal)
+
+    # 2. CSV file logging (velocity-specific columns)
+    log_velocity_signal_to_csv(signal)
+
+    # 3. Telegram alert (legacy — notification only, no buttons)
+    _send_velocity_telegram(signal)
+
+    # 4. Database logging
+    try:
+        from db_logger import log_breakout_signal
+        log_breakout_signal(signal)
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"   💾 DB: ❌ {e}")
+
+    # 5. Push to Supabase for live dashboard (returns row_id for HITL)
+    row_id = None
+    try:
+        from supabase_bridge import push_velocity_to_dashboard
+        success, row_id = push_velocity_to_dashboard(signal)
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"   🌐 Dashboard: ❌ {e}")
+
+    # 6. HITL: Send interactive Telegram approval request
+    if HITL_ENABLED and _hitl_bot and row_id:
+        try:
+            # Build signal data dict for the bot
+            signal_data = {
+                "symbol": signal.symbol,
+                "direction": signal.direction,
+                "signal_type": signal.signal_type,
+                "trigger_price": float(signal.trigger_price),
+                "target_price": float(signal.target_price),
+                "stop_loss": float(signal.stop_loss),
+                "wobi_ratio": float(signal.wobi),
+                "atr_1m": float(signal.atr_1m),
+                "volume_spike": float(signal.volume_ratio),
+                "signal_time": str(signal.timestamp),
+            }
+            _hitl_bot.send_approval_request(signal_data, row_id)
+            print(f"   🤖 HITL: ✅ Approval request sent for {signal.symbol} (ID: {row_id})")
+        except Exception as e:
+            print(f"   🤖 HITL: ❌ {e}")
+    elif HITL_ENABLED and not _hitl_bot:
+        print(f"   🤖 HITL: ⚠ Bot not registered — signal not gated")
+
+
+def _send_velocity_telegram(signal) -> bool:
+    """Send a velocity scalp alert via Telegram bot."""
+    if "your_" in TELEGRAM_BOT_TOKEN or "your_" in TELEGRAM_CHAT_ID:
+        print(f"   {_DIM}📱 Telegram: Skipped (configure in config.py){_RESET}")
+        return False
+
+    icon = "⚡" if signal.direction == "BUY" else "💥"
+    risk = abs(signal.trigger_price - signal.stop_loss)
+    reward = abs(signal.target_price - signal.trigger_price)
+    rr_label = f"1:{reward / risk:.1f}" if risk > 0 else "N/A"
+
+    msg = (
+        f"{icon} *3-POINT {signal.direction} VELOCITY — {signal.symbol}*\n"
+        f"\n"
+        f"🎯 Signal: `{signal.signal_type}`\n"
+        f"💰 Entry: `₹{signal.trigger_price}`\n"
+        f"✅ Target: `₹{signal.target_price}` (+₹3.00)\n"
+        f"🛑 Stop: `₹{signal.stop_loss}` (-₹1.50)\n"
+        f"📐 R:R: `{rr_label}`\n"
+        f"📊 WOBI: `{signal.wobi:+.4f}`\n"
+        f"📈 ATR(1m): `{signal.atr_1m:.4f} pts`\n"
+        f"🔊 Volume: `{signal.volume_ratio:.2f}× avg`\n"
+        f"📉 Trend: `{signal.trend}`\n"
+        f"🕐 Time: `{signal.timestamp}`\n"
+        f"\n"
+        f"⚡ _SCALP — Execute manually on Groww_"
+    )
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": msg,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print(f"   📱 Telegram: ✅ Velocity alert sent for {signal.symbol}")
+            return True
+        else:
+            print(f"   📱 Telegram: ❌ HTTP {resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"   📱 Telegram: ❌ {e}")
+        return False

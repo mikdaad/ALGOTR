@@ -1,0 +1,58 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# .dockerignore — Zerodha Signal Engine
+# Prevents sensitive files and build artifacts from being copied into the
+# Docker image. Keep this tight — every excluded file = smaller image + no leaks.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Git metadata (never needed in production image)
+.git
+.gitignore
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments (dependencies are installed fresh in Docker)
+.venv/
+venv/
+env/
+
+# Secrets and tokens — NEVER bake these into the image
+access_token.json
+.env
+.env.*
+*.env
+
+# Data files (mounted as volumes at runtime)
+triggered_signals.csv
+signals_archive_*.csv
+
+# Docker itself
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Frontend (separate deployment, not needed in Python backend)
+dashboard/
+
+# Dev tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

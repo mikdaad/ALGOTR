@@ -1,31 +1,35 @@
 """
 ==================================================================================
-  PHASE 2 — Live Breakout + Tier-Weighted OBI Engine (live_engine.py) [v3]
+  PHASE 2+4 — Live Breakout + Tier-Weighted OBI + Velocity Scanner (live_engine.py) [v4]
 ==================================================================================
   Streams live ticks via Kite WebSocket for Phase-1 screened watchlist targets.
 
-  Detects "Strong Breakout Alerts" when BOTH conditions are simultaneous:
-
+  PHASE 2 — 5-Min Opening Range Breakout:
     Condition A — PRICE BREAKOUT:
       5-min candle closes above the Opening 15-Min High (Bull)
       or below the Opening 15-Min Low (Bear).
-
     Condition B — TIER-WEIGHTED ORDER BOOK IMBALANCE (Level 2):
       WOBI = (WeightedBids - WeightedAsks) / (WeightedBids + WeightedAsks)
       Tier weights: [0.40, 0.20, 0.20, 0.10, 0.10] (anti-spoofing)
       Bull: WOBI ≥ +0.60    Bear: WOBI ≤ -0.60
 
-  v3 UPGRADES:
+  PHASE 4 — 1-Min 3-Point Velocity Scanner (NEW):
+    Parallel real-time scanner running on 1-min micro-candles.
+    Catches ±3pt scalp expansions via consolidation breakout + volume
+    surge + aggressive WOBI confirmation. See velocity_scanner.py.
+
+  v4 UPGRADES:
     - Thread-safe queue: WebSocket callback enqueues ticks instantly, a
       background worker drains the queue for candle/OBI computation.
-      This prevents WOBI calculation from causing dropped packets.
-    - Trend metadata: accepts optional "trend" field from screener
-      watchlist to filter directional signals (ABOVE-EMA only for buys).
+    - Velocity Scanner co-processor: every tick is fed to both the
+      5-min breakout evaluator AND the 1-min velocity scanner.
+    - Trend metadata: accepts optional "trend" field from screener.
     - Tier-weighted OBI anti-spoofing (40/40/20 tiering).
 
   Architecture:
-    WebSocket → tick_queue (thread-safe) → worker thread → candle + OBI
-    → BreakoutSignal → on_signal callback → alerts.py
+    WebSocket → tick_queue (thread-safe) → worker thread
+      ├─→ 5-min candle + OBI → BreakoutSignal → on_signal callback
+      └─→ 1-min velocity scanner → VelocitySignal → on_velocity_signal
 ==================================================================================
 """
 
@@ -39,6 +43,8 @@ from typing import Dict, List, Optional, Callable
 
 import pytz
 from kiteconnect import KiteTicker
+
+from velocity_scanner import VelocityScanner
 
 from config import (
     KITE_API_KEY,
@@ -220,13 +226,15 @@ class LiveBreakoutEngine:
     """
 
     def __init__(self, api_key: str, access_token: str,
-                 watchlist: List[Dict], on_signal: Callable):
+                 watchlist: List[Dict], on_signal: Callable,
+                 on_velocity_signal: Optional[Callable] = None):
         """
         Args:
             api_key: Kite API key.
             access_token: Today's access token.
             watchlist: List of {"symbol": str, "token": int, "trend": str (opt)}.
             on_signal: Callback function(BreakoutSignal) called on detection.
+            on_velocity_signal: Callback function(VelocitySignal) for 3-pt scalps.
         """
         self.api_key = api_key
         self.access_token = access_token
@@ -239,7 +247,7 @@ class LiveBreakoutEngine:
         for s in watchlist:
             self.trend_map[s["token"]] = s.get("trend", "N/A")
 
-        # Per-token state
+        # Per-token state (Phase 2: 5-min breakout)
         self.candles: Dict[int, LiveCandle] = {}
         self.candle_boundaries: Dict[int, datetime] = {}
         self.opening_ranges: Dict[int, OpeningRange] = {}
@@ -250,6 +258,16 @@ class LiveBreakoutEngine:
         for token in self.tokens:
             self.candles[token] = LiveCandle()
             self.opening_ranges[token] = OpeningRange()
+
+        # ── Phase 4: Velocity Scanner (1-min 3-point scalps) ──
+        self.velocity_scanner: Optional[VelocityScanner] = None
+        if on_velocity_signal is not None:
+            self.velocity_scanner = VelocityScanner(
+                watchlist=self.watchlist,
+                trend_map=self.trend_map,
+                on_velocity_signal=on_velocity_signal,
+            )
+            print(f"   ⚡ Velocity Scanner: ARMED ({len(self.watchlist)} tokens)")
 
         # Thread-safe tick queue — prevents WebSocket lag from WOBI computation
         self._tick_queue: queue.Queue = queue.Queue(maxsize=50000)
@@ -424,6 +442,10 @@ class LiveBreakoutEngine:
         self.candles[token].update(ltp, volume, ts)
         self.candle_boundaries[token] = boundary
 
+        # ── Phase 4: Feed tick to Velocity Scanner (1-min parallel path) ──
+        if self.velocity_scanner is not None:
+            self.velocity_scanner.on_tick(token, ltp, volume, ts, tick)
+
     # ── Breakout Evaluation ──────────────────────────────────────────────────
 
     def _evaluate_breakout(self, token: int, candle: LiveCandle, ts: datetime):
@@ -533,3 +555,16 @@ class LiveBreakoutEngine:
             f"Q={q_size} | "
             f"rx={self._ticks_received:,} proc={self._ticks_processed:,} drop={self._ticks_dropped}"
         )
+
+        # Velocity Scanner status
+        if self.velocity_scanner is not None:
+            vs = self.velocity_scanner.get_status()
+            print(
+                f"   ⚡ Velocity [{now.strftime('%H:%M:%S')}]: "
+                f"{vs['eligible']} eligible | "
+                f"{vs['active_scanning']} scanning | "
+                f"{vs['signals_fired']} fired | "
+                f"dedup={vs['dedup_cache_size']}"
+            )
+            # Periodic dedup cleanup
+            self.velocity_scanner.cleanup_dedup()

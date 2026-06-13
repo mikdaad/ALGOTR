@@ -23,14 +23,19 @@ ACCESS_TOKEN_FILE = "access_token.json"
 # ──────────────────────────────────────────────────────────────────────────────
 # TELEGRAM ALERT CREDENTIALS
 # ──────────────────────────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = "your_telegram_bot_token_here"
-TELEGRAM_CHAT_ID = "your_telegram_chat_id_here"
+TELEGRAM_BOT_TOKEN = "7206254977:AAGvXrpqfgrHtsVPxp1lNlGzv94f52_xqKA"
+TELEGRAM_CHAT_ID = "1832175468"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SUPABASE / POSTGRESQL LOGGING (Optional)
 # ──────────────────────────────────────────────────────────────────────────────
 ENABLE_DB_LOGGING = False
 SUPABASE_DB_URL = "postgresql://postgres.wmflxdqnbqchpwdarslk:Mik74738W!93@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres"
+
+# Supabase REST API credentials (for supabase-py client + dashboard bridge)
+# Find these in: Supabase Dashboard → Settings → API
+SUPABASE_URL = "https://wmflxdqnbqchpwdarslk.supabase.co"
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndtZmx4ZHFuYnFjaHB3ZGFyc2xrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MjkzODMsImV4cCI6MjA4ODEwNTM4M30.nTv1JYsJKS7dt7HLm5pOmgr0F32Sfc9S1k3U4-k91nc"  # ← Replace with your service_role key
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PHASE 1: PRE-MARKET SCREENER PARAMETERS
@@ -143,6 +148,46 @@ OBI_BULL_THRESHOLD = 0.60         # Trigger BUY only if weighted OBI ≥ 0.60
 OBI_BEAR_THRESHOLD = -0.60        # Trigger SELL only if weighted OBI ≤ -0.60
 
 # ──────────────────────────────────────────────────────────────────────────────
+# PHASE 4: VELOCITY SCANNER — 3-POINT SCALP DETECTOR
+# ──────────────────────────────────────────────────────────────────────────────
+# Ultra-low-latency scanner for rapid ±3 point intraday price expansions.
+# Runs on 1-minute micro-candles inside the worker thread alongside Phase 2.
+
+# ── Dynamic Universe Filter ──
+# Only monitor stocks in the ₹150–₹500 band where a 3-pt move is
+# a meaningful 0.6%–2.0% expansion — high probability, high velocity.
+VELOCITY_PRICE_MIN = 150.0
+VELOCITY_PRICE_MAX = 500.0
+
+# ── ATR Feasibility Gate ──
+# 1-minute ATR over the last 20 bars must be ≥ 0.50 points.
+# This proves the stock has enough inherent velocity to reach
+# the 3-point target without getting trapped in sideways chop.
+VELOCITY_ATR_PERIOD = 20          # Number of 1-min bars for ATR calculation
+VELOCITY_ATR_MIN = 0.50           # Minimum 1-min ATR to qualify (points)
+
+# ── Micro-Consolidation Breakout ──
+# Track the high/low envelope of the last N completed 1-min bars.
+# Trigger fires when LTP pierces this micro-range.
+VELOCITY_CONSOLIDATION_BARS = 3   # Trailing bar count for H/L envelope
+
+# ── Volume Surge Confirmation ──
+# Current 1-min bar volume must exceed N× the average of the last M bars.
+VELOCITY_VOLUME_LOOKBACK = 10     # Bars to average for baseline volume
+VELOCITY_VOLUME_MULTIPLIER = 2.0  # Required surge multiple (2× avg)
+
+# ── WOBI Thresholds (stricter than Phase 2) ──
+# Anti-spoofing weighted order book imbalance must confirm aggressive
+# participation from the correct side before triggering.
+VELOCITY_WOBI_BULL = 0.70         # Buy trigger: WOBI ≥ +0.70
+VELOCITY_WOBI_BEAR = -0.70        # Sell trigger: WOBI ≤ -0.70
+
+# ── Scalp Target & Risk ──
+# Fixed 1:2 Risk-to-Reward ratio for crisp scalping.
+VELOCITY_SCALP_TARGET = 3.00      # Target move in points (₹3.00)
+VELOCITY_STOP_LOSS = 1.50         # Stop-loss distance in points (₹1.50)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FALLBACK WATCHLIST (used if screener hasn't run yet)
 # ──────────────────────────────────────────────────────────────────────────────
 FALLBACK_WATCHLIST = [
@@ -160,6 +205,19 @@ FALLBACK_WATCHLIST = [
 
 # File where Phase 1 saves the screened watchlist for Phase 2
 SCREENED_WATCHLIST_FILE = "screened_watchlist.json"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 5: HUMAN-IN-THE-LOOP (HITL) EXECUTION GATEWAY
+# ──────────────────────────────────────────────────────────────────────────────
+# When enabled, velocity signals are sent as interactive Telegram messages
+# with APPROVE/REJECT buttons. On approval, the user types QTY, SL, TARGET
+# and the engine executes via kite.place_order().
+# Breakout signals remain alert-only regardless of this setting.
+
+HITL_ENABLED = False              # Master kill-switch (set True to enable live orders)
+HITL_EXPIRY_SECONDS = 120         # Signal expires if not approved within 2 min
+HITL_PRODUCT_TYPE = "MIS"         # "MIS" (intraday) or "CNC" (delivery)
+HITL_ORDER_TYPE = "LIMIT"         # "LIMIT" or "MARKET"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MARKET HOURS (IST)

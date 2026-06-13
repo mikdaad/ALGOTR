@@ -1,6 +1,6 @@
 """
 ==================================================================================
-  MAIN ORCHESTRATOR — v3 Live Breakout + Tier-Weighted OBI (main.py)
+  MAIN ORCHESTRATOR — v4 Live Breakout + Velocity Scanner (main.py)
 ==================================================================================
   
   Two operating modes:
@@ -13,13 +13,15 @@
     MODE 2: LIVE ENGINE (default)
       python main.py
       Reads screened_watchlist.json, subscribes WebSocket to those tokens,
-      and runs the Breakout + WOBI detection engine.
+      and runs:
+        Phase 2: 5-min Opening Range Breakout + WOBI detection
+        Phase 4: 1-min 3-Point Velocity Scalp Scanner (NEW)
       All triggered signals are printed in color and logged to CSV.
       
   DAILY WORKFLOW:
     Evening:    python auth.py             # Login for tomorrow
                 python main.py --screener  # VCP + trend scan
-    Morning:    python main.py             # Live breakout engine
+    Morning:    python main.py             # Live breakout + velocity engine
     
   NO TRADES ARE EXECUTED. All signals are alert-only.
   Signals logged to: triggered_signals.csv
@@ -46,6 +48,14 @@ from config import (
     OBI_BEAR_THRESHOLD,
     OPENING_RANGE_MINUTES,
     LIVE_CANDLE_MINUTES,
+    VELOCITY_PRICE_MIN,
+    VELOCITY_PRICE_MAX,
+    VELOCITY_ATR_MIN,
+    VELOCITY_WOBI_BULL,
+    VELOCITY_WOBI_BEAR,
+    VELOCITY_SCALP_TARGET,
+    VELOCITY_STOP_LOSS,
+    HITL_ENABLED,
 )
 from auth import load_access_token, get_authenticated_kite
 
@@ -124,10 +134,10 @@ def run_screener_mode():
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_live_mode():
-    """Execute Phase 2 live breakout + tier-weighted OBI engine."""
+    """Execute Phase 2 live breakout + tier-weighted OBI engine with HITL Execution Gateway."""
     from screener import load_screened_watchlist
     from live_engine import LiveBreakoutEngine
-    from alerts import handle_breakout_signal, CSV_LOG_FILE
+    from alerts import handle_breakout_signal, handle_velocity_signal, CSV_LOG_FILE
 
     print_banner("LIVE")
 
@@ -150,6 +160,33 @@ def run_live_mode():
         print(f"   • {s['symbol']:<14} token={s['token']:<10} trend={trend_label}")
     print(f"\n📄 Signals will be logged to: {os.path.abspath(CSV_LOG_FILE)}\n")
 
+    # Initialize HITL components if enabled
+    bot = None
+    listener = None
+    if HITL_ENABLED:
+        print("   🚀 HITL Mode is ENABLED. Booting Execution Gateway...")
+        try:
+            kite = get_authenticated_kite()
+        except Exception as e:
+            print(f"❌ Failed to get authenticated Kite Connect instance for order placement: {e}")
+            sys.exit(1)
+        
+        from order_executor import OrderExecutor
+        from hitl_bot import HITLBot
+        from supabase_listener import SupabaseApprovalListener
+        from alerts import register_hitl_bot
+
+        executor = OrderExecutor(kite=kite)
+        bot = HITLBot(execute_fn=executor.execute_signal)
+        register_hitl_bot(bot)
+        
+        listener = SupabaseApprovalListener(execute_fn=executor.execute_signal)
+        
+        bot.start()
+        listener.start()
+    else:
+        print("   ⚠️ HITL Mode is DISABLED. Operating in ALERT ONLY mode.")
+
     # Wait for market to open
     if not is_market_hours():
         wait_for_market_open()
@@ -160,6 +197,7 @@ def run_live_mode():
         access_token=access_token,
         watchlist=watchlist,
         on_signal=handle_breakout_signal,
+        on_velocity_signal=handle_velocity_signal,
     )
 
     try:
@@ -182,7 +220,17 @@ def run_live_mode():
         traceback.print_exc()
     finally:
         engine.stop()
-        print("   No trades were executed. Goodbye!")
+        if bot:
+            try:
+                bot.stop()
+            except Exception as e:
+                print(f"Error stopping Telegram bot: {e}")
+        if listener:
+            try:
+                listener.stop()
+            except Exception as e:
+                print(f"Error stopping Supabase listener: {e}")
+        print("   Goodbye!")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -206,11 +254,21 @@ def print_banner(mode: str):
         print(f"   OBI Thresholds:    Bull ≥ {OBI_BULL_THRESHOLD} | Bear ≤ {OBI_BEAR_THRESHOLD}")
         from config import OBI_TIER_WEIGHTS
         print(f"   OBI Tier Weights:  {OBI_TIER_WEIGHTS}")
+        print(f"   ──────────────────────────────────────────────────────────────────")
+        print(f"   ⚡ Velocity Scanner: ARMED")
+        print(f"   Price Band:        ₹{VELOCITY_PRICE_MIN:.0f}–₹{VELOCITY_PRICE_MAX:.0f}")
+        print(f"   1m ATR Gate:       ≥ {VELOCITY_ATR_MIN} pts")
+        print(f"   WOBI Velocity:     Bull ≥ {VELOCITY_WOBI_BULL} | Bear ≤ {VELOCITY_WOBI_BEAR}")
+        print(f"   Scalp Target:      ±₹{VELOCITY_SCALP_TARGET:.2f} (R:R = 1:2)")
+        print(f"   Stop-Loss:         ±₹{VELOCITY_STOP_LOSS:.2f}")
     print(f"   DB Logging:        {'✅ Enabled' if ENABLE_DB_LOGGING else '❌ Disabled'}")
     print(f"   CSV Signal Log:    triggered_signals.csv")
     print(f"   Market Hours:      {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} – {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} IST")
     print("=" * 70)
-    print("   Mode: ALERT ONLY — No auto-trading. Execute on Groww manually.")
+    if HITL_ENABLED:
+        print("   Mode: HITL EXECUTION GATEWAY — Orders placed on confirmation.")
+    else:
+        print("   Mode: ALERT ONLY — No auto-trading. Execute on Groww manually.")
     print("=" * 70)
     print()
 
