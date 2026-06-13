@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 1: Builder — install deps in a layer we can cache aggressively
 # ──────────────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 # Install build tools needed for psycopg2 and pandas native extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,11 +22,11 @@ RUN pip install --upgrade pip && \
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: Runtime — lean final image (~200MB vs ~800MB single-stage)
 # ──────────────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 LABEL maintainer="trading-engine" \
-      version="4.0" \
-      description="Zerodha Signal Engine — Live Breakout + 3-Point Velocity Scanner"
+    version="4.0" \
+    description="Zerodha Signal Engine — Live Breakout + 3-Point Velocity Scanner"
 
 # Runtime libs only (libpq5 for psycopg2, tzdata for IST timezone)
 RUN apt-get update && apt-get install -y --no-install-recommends \
