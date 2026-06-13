@@ -15,8 +15,7 @@ applications:
           commands:
             - npm run build
       artifacts:
-        # Next.js App Router (SSR) output — Amplify reads from .next automatically
-        baseDirectory: .next
+        baseDirectory: out
         files:
           - '**/*'
       cache:
