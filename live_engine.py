@@ -1,37 +1,43 @@
 """
 ==================================================================================
-  PHASE 2+4 — Live Breakout + Tier-Weighted OBI + Velocity Scanner (live_engine.py) [v4]
+  PHASE 2+4+5 — Live Breakout + VPA + Velocity Scanner (live_engine.py) [v5]
 ==================================================================================
   Streams live ticks via Kite WebSocket for Phase-1 screened watchlist targets.
 
-  PHASE 2 — 5-Min Opening Range Breakout:
-    Condition A — PRICE BREAKOUT:
-      5-min candle closes above the Opening 15-Min High (Bull)
-      or below the Opening 15-Min Low (Bear).
+  PHASE 2 — 5-Min VPA-Upgraded Breakout:
+    Condition A — PRICE BREAKOUT (3 setup types):
+      VAH_BREAKOUT:   5-min candle closes ABOVE the intraday Value Area High
+      VAL_BREAKDOWN:  5-min candle closes BELOW the intraday Value Area Low
+      POC_REJECTION:  Live price touches POC with WOBI flipping against direction
+      OR_BREAKOUT:    Fallback to classic 15-min Opening Range when VPA not ready
     Condition B — TIER-WEIGHTED ORDER BOOK IMBALANCE (Level 2):
       WOBI = (WeightedBids - WeightedAsks) / (WeightedBids + WeightedAsks)
       Tier weights: [0.40, 0.20, 0.20, 0.10, 0.10] (anti-spoofing)
-      Bull: WOBI ≥ +0.60    Bear: WOBI ≤ -0.60
+      Bull: WOBI >= +0.60    Bear: WOBI <= -0.60
 
-  PHASE 4 — 1-Min 3-Point Velocity Scanner (NEW):
+  PHASE 4 — 1-Min 3-Point Velocity Scanner:
     Parallel real-time scanner running on 1-min micro-candles.
-    Catches ±3pt scalp expansions via consolidation breakout + volume
+    Catches scalp expansions via consolidation breakout + volume
     surge + aggressive WOBI confirmation. See velocity_scanner.py.
 
-  v4 UPGRADES:
-    - Thread-safe queue: WebSocket callback enqueues ticks instantly, a
-      background worker drains the queue for candle/OBI computation.
-    - Velocity Scanner co-processor: every tick is fed to both the
-      5-min breakout evaluator AND the 1-min velocity scanner.
-    - Trend metadata: accepts optional "trend" field from screener.
-    - Tier-weighted OBI anti-spoofing (40/40/20 tiering).
+  PHASE 5 — StreamingVolumeProfile (O(1) per-tick update):
+    Each token owns a StreamingVolumeProfile (numpy bin array).
+    Updated inline in _process_tick() — zero I/O, zero callbacks.
+    POC/VAH/VAL queried at candle-close for dynamic SL+Target.
+
+  DYNAMIC TARGETING (replaces static ±3pt offsets):
+    VAH_BREAKOUT BUY:  SL = VAH - 2×bin | Target = VAH + (VAH - POC)
+    VAL_BREAKDOWN SELL: SL = VAL + 2×bin | Target = VAL - (POC - VAL)
+    POC_REJECTION SELL: SL = POC + 4×bin | Target = VAL
+    POC_REJECTION BUY:  SL = POC - 4×bin | Target = VAH
+    OR_BREAKOUT (fallback): SL = candle_low | Target = entry + 2×risk
 
   Architecture:
     WebSocket → tick_queue (thread-safe) → worker thread
-      ├─→ 5-min candle + OBI → BreakoutSignal → on_signal callback
-      └─→ 1-min velocity scanner → VelocitySignal → on_velocity_signal
-==================================================================================
-"""
+      ├─→ StreamingVolumeProfile.update()  (O(1), every tick)
+      ├─→ 5-min candle + VPA + OBI → BreakoutSignal (with POC/VAH/VAL)
+      └─→ 1-min velocity scanner → VelocitySignal
+=================================================================================="""
 
 import json
 import time
@@ -45,6 +51,7 @@ import pytz
 from kiteconnect import KiteTicker
 
 from velocity_scanner import VelocityScanner
+from volume_profile import VolumeProfileEngine, handle_vpa_signal, StreamingVolumeProfile
 
 from config import (
     KITE_API_KEY,
@@ -109,13 +116,20 @@ class OpeningRange:
 
 @dataclass
 class BreakoutSignal:
-    """Emitted when a breakout + WOBI condition is confirmed."""
+    """
+    Emitted when a breakout + WOBI condition is confirmed.
+
+    v5 VPA upgrade: `target_price`, `vpa_signal_type`, `current_poc`,
+    `current_vah`, and `current_val` replace the old static stop-loss logic.
+    All three VPA levels are forwarded to Supabase and Telegram so the trader
+    can see the exact institutional liquidity nodes before approving a trade.
+    """
     symbol: str
     token: int
     direction: str                # "BUY" or "SELL"
-    breakout_type: str            # "BULL_BREAKOUT" or "BEAR_BREAKOUT"
+    breakout_type: str            # legacy field — kept for CSV compatibility
     entry_price: float            # Close of the breakout candle
-    stop_loss: float              # Low (bull) or High (bear) of breakout candle
+    stop_loss: float              # VPA-derived stop-loss (or candle low/high fallback)
     obi: float                    # Weighted Order Book Imbalance ratio
     or_high: float                # Opening range high
     or_low: float                 # Opening range low
@@ -127,6 +141,13 @@ class BreakoutSignal:
     total_bid_qty: int = 0
     total_ask_qty: int = 0
     trend: str = "N/A"            # "ABOVE" or "BELOW" from screener EMA filter
+    # ── VPA v5 fields (dynamic targets) ──────────────────────────────────────
+    target_price: float = 0.0    # VPA-derived profit target
+    vpa_signal_type: str = ""    # "VAH_BREAKOUT" | "VAL_BREAKDOWN" | "POC_REJECTION" | "OR_BREAKOUT"
+    current_poc: float = 0.0     # Intraday Point of Control at trigger time
+    current_vah: float = 0.0     # Intraday Value Area High at trigger time
+    current_val: float = 0.0     # Intraday Value Area Low at trigger time
+    vpa_ready: bool = False      # True if profile had enough volume when signal fired
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -227,7 +248,8 @@ class LiveBreakoutEngine:
 
     def __init__(self, api_key: str, access_token: str,
                  watchlist: List[Dict], on_signal: Callable,
-                 on_velocity_signal: Optional[Callable] = None):
+                 on_velocity_signal: Optional[Callable] = None,
+                 on_vpa_signal: Optional[Callable] = None):
         """
         Args:
             api_key: Kite API key.
@@ -254,10 +276,21 @@ class LiveBreakoutEngine:
         self.last_ticks: Dict[int, dict] = {}
         self.seen_signals: set = set()
 
-        # Initialize state for each token
+        # ── Phase 5: Inline StreamingVolumeProfile (O(1) per-tick) ──
+        # Each token gets its own lightweight numpy bin array.
+        # Updated on every tick in _process_tick (no callbacks, no threads).
+        # Queried at candle-close by _evaluate_vpa_breakout for dynamic SL+Target.
+        self.vp_profiles: Dict[int, StreamingVolumeProfile] = {}
+        self._last_vols: Dict[int, int] = {}   # Cumulative→delta conversion
+
+        # Initialize per-token state
         for token in self.tokens:
             self.candles[token] = LiveCandle()
             self.opening_ranges[token] = OpeningRange()
+            self.vp_profiles[token] = StreamingVolumeProfile(bin_size=0.10)
+            self._last_vols[token] = 0
+
+        print(f"   📊 StreamingVolumeProfile: ARMED ({len(self.tokens)} tokens, bin=₹0.10)")
 
         # ── Phase 4: Velocity Scanner (1-min 3-point scalps) ──
         self.velocity_scanner: Optional[VelocityScanner] = None
@@ -268,6 +301,18 @@ class LiveBreakoutEngine:
                 on_velocity_signal=on_velocity_signal,
             )
             print(f"   ⚡ Velocity Scanner: ARMED ({len(self.watchlist)} tokens)")
+
+        # ── Phase 5: Volume Profile Analysis Engine ──
+        # Builds intraday VPA profiles for POC/VAH/VAL detection.
+        # Pass on_vpa_signal=handle_vpa_signal to activate from main.py.
+        self.vpa_engine: Optional[VolumeProfileEngine] = None
+        if on_vpa_signal is not None:
+            self.vpa_engine = VolumeProfileEngine(
+                watchlist=self.watchlist,
+                trend_map=self.trend_map,
+                on_vpa_signal=on_vpa_signal,
+            )
+            print(f"   📊 VPA Engine: ARMED ({len(self.watchlist)} tokens)")
 
         # Thread-safe tick queue — prevents WebSocket lag from WOBI computation
         self._tick_queue: queue.Queue = queue.Queue(maxsize=50000)
@@ -433,7 +478,7 @@ class LiveBreakoutEngine:
                 print(f"   📐 {sym} Opening Range set: High=₹{orng.high:.2f} Low=₹{orng.low:.2f}")
 
             # Evaluate breakout on the closed candle
-            self._evaluate_breakout(token, closed_candle, ts)
+            self._evaluate_vpa_breakout(token, closed_candle, ts)
 
             # Reset candle for new period
             self.candles[token].reset()
@@ -446,52 +491,63 @@ class LiveBreakoutEngine:
         if self.velocity_scanner is not None:
             self.velocity_scanner.on_tick(token, ltp, volume, ts, tick)
 
-    # ── Breakout Evaluation ──────────────────────────────────────────────────
+        # ── Phase 5: Inline StreamingVolumeProfile update (O(1) HOT PATH) ──
+        # Convert Kite's cumulative session volume to per-tick delta.
+        # bins[price_bin_index] += delta  — single numpy scalar write.
+        delta = max(0, volume - self._last_vols.get(token, 0))
+        self._last_vols[token] = volume
+        if delta > 0 and token in self.vp_profiles:
+            self.vp_profiles[token].update(ltp, delta)
 
-    def _evaluate_breakout(self, token: int, candle: LiveCandle, ts: datetime):
+        # ── Phase 5 (also): VolumeProfileEngine co-processor (separate callbacks)
+        if self.vpa_engine is not None:
+            self.vpa_engine.on_tick(token, ltp, volume, ts, tick)
+
+    # ── VPA-Upgraded Breakout Evaluation ───────────────────────────────────────
+
+    def _evaluate_vpa_breakout(self, token: int, candle: LiveCandle, ts: datetime):
         """
-        Check Condition A (price breakout) and Condition B (WOBI) simultaneously.
-        Also applies trend filter: BUY only for ABOVE-EMA stocks.
+        VPA-upgraded breakout evaluator (replaces the static OR-only version).
+
+        Evaluates 3 setups in priority order:
+
+        PRIORITY 1 — VAH_BREAKOUT / VAL_BREAKDOWN (VPA ready):
+            Triggered when the 5-min candle closes outside the Value Area,
+            confirmed by institutional WOBI. SL and Target are derived from
+            the live POC/VAH/VAL nodes — not static offsets.
+
+        PRIORITY 2 — POC_REJECTION (VPA ready):
+            Triggered when the candle close is within 2 bins of the POC AND
+            the WOBI is heavily skewed against the approach direction.
+            Targets the opposite VA boundary.
+
+        PRIORITY 3 — OR_BREAKOUT (fallback, VPA not yet ready):
+            Classic 15-min Opening Range breakout. Used in the first ~15 candles
+            before the volume profile has accumulated enough data.
+            Uses fixed 1:2 R:R with candle high/low as stop.
+
+        DEDUP KEY:
+            (token, candle_start_time, vpa_signal_type)
+            This allows multiple setup types per candle (e.g., an OR breakout
+            AND a VAH breakout if both conditions are met simultaneously).
         """
         symbol = self.watchlist[token]
-        orng = self.opening_ranges[token]
-        trend = self.trend_map.get(token, "N/A")
+        orng   = self.opening_ranges[token]
+        trend  = self.trend_map.get(token, "N/A")
 
-        # Opening range must be established first
-        if not orng.is_set:
-            return
-
-        # Skip if candle has no data
         if candle.tick_count == 0:
             return
 
-        # ── Condition A: Price Breakout ──
-        bull_breakout = candle.close > orng.high
-        bear_breakout = candle.close < orng.low
-
-        if not bull_breakout and not bear_breakout:
-            return
-
-        # ── Trend Filter ──
-        # BUY signals only for stocks above their 20-EMA (ABOVE trend)
-        # SELL signals only for stocks below their 20-EMA (BELOW trend)
-        if bull_breakout and trend == "BELOW":
-            return  # Skip: buying into a downtrend
-        if bear_breakout and trend == "ABOVE":
-            return  # Skip: shorting into an uptrend
-
-        # ── Condition B: Tier-Weighted Order Book Imbalance ──
+        # ── Condition B: WOBI (required for all setups) ────────────────────
         latest_tick = self.last_ticks.get(token)
         if latest_tick is None:
             return
-
         obi = calculate_obi(latest_tick)
         if obi is None:
             return
-
         total_bid, total_ask = get_depth_quantities(latest_tick)
 
-        # Check WOBI thresholds
+        close  = candle.close
         signal = None
 
         if bull_breakout and obi >= OBI_BULL_THRESHOLD:
@@ -568,3 +624,16 @@ class LiveBreakoutEngine:
             )
             # Periodic dedup cleanup
             self.velocity_scanner.cleanup_dedup()
+
+        # VPA Engine status
+        if self.vpa_engine is not None:
+            vpa = self.vpa_engine.get_status()
+            print(
+                f"   📊 VPA [{now.strftime('%H:%M:%S')}]: "
+                f"{vpa['profiles_active']}/{vpa['total_tokens']} active | "
+                f"{vpa['signals_fired']} fired | "
+                f"ticks={vpa['ticks_processed']:,} | "
+                f"dedup={vpa['dedup_cache_size']}"
+            )
+            # Periodic dedup cleanup
+            self.vpa_engine.cleanup_dedup(now)

@@ -53,8 +53,10 @@ _RESET = "\033[0m"
 # ──────────────────────────────────────────────────────────────────────────────
 
 CSV_COLUMNS = [
-    "Timestamp", "Symbol", "Direction", "Breakout_Type", "Trigger_Price",
-    "Stop_Loss", "WOBI_Ratio", "Bid_Qty", "Ask_Qty", "OR_High", "OR_Low",
+    "Timestamp", "Symbol", "Direction", "Breakout_Type", "VPA_Signal",
+    "Trigger_Price", "Target_Price", "Stop_Loss",
+    "POC", "VAH", "VAL", "VPA_Ready",
+    "WOBI_Ratio", "Bid_Qty", "Ask_Qty", "OR_High", "OR_Low",
     "Candle_OHLC", "Trend", "Token",
 ]
 
@@ -71,10 +73,11 @@ def log_signal_to_csv(signal) -> None:
     """
     Append a triggered signal to triggered_signals.csv.
     Thread-safe: opens file in append mode per write (no shared handle).
+    v5: Includes VPA levels (POC, VAH, VAL, target_price).
     """
     _ensure_csv_header()
 
-    ohlc = f"{signal.candle_open}/{signal.candle_high}/{signal.candle_low}/{signal.candle_close}"
+    ohlc  = f"{signal.candle_open}/{signal.candle_high}/{signal.candle_low}/{signal.candle_close}"
     trend = getattr(signal, "trend", "N/A")
 
     row = [
@@ -83,8 +86,14 @@ def log_signal_to_csv(signal) -> None:
         signal.symbol,
         signal.direction,
         signal.breakout_type,
+        getattr(signal, "vpa_signal_type", ""),
         signal.entry_price,
+        getattr(signal, "target_price", ""),
         signal.stop_loss,
+        getattr(signal, "current_poc", ""),
+        getattr(signal, "current_vah", ""),
+        getattr(signal, "current_val", ""),
+        getattr(signal, "vpa_ready", False),
         f"{signal.obi:+.4f}",
         signal.total_bid_qty,
         signal.total_ask_qty,
@@ -169,34 +178,60 @@ def log_velocity_signal_to_csv(signal) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def print_breakout_signal(signal) -> None:
-    """Print a highly visible, color-coded console alert for a breakout signal."""
-    is_buy = signal.direction == "BUY"
-    color = _GREEN if is_buy else _RED
-    icon = "🟢" if is_buy else "🔴"
+    """
+    Print a highly visible, color-coded console alert for a breakout signal.
+    v5: Adds VPA levels panel (POC / VAH / VAL / Target / R:R).
+    """
+    is_buy  = signal.direction == "BUY"
+    color   = _GREEN if is_buy else _RED
+    icon    = "🟢" if is_buy else "🔴"
     dir_label = f"{color}{_BOLD}{signal.direction}{_RESET}"
     obi_bar = _obi_bar(signal.obi)
-    trend = getattr(signal, "trend", "N/A")
-    border = "═" * 68
+    trend   = getattr(signal, "trend", "N/A")
+    border  = "=" * 68
+
+    # VPA fields (v5)
+    vpa_type   = getattr(signal, "vpa_signal_type", "") or "OR_BREAKOUT"
+    target     = getattr(signal, "target_price",  0.0)
+    poc        = getattr(signal, "current_poc",   0.0)
+    vah        = getattr(signal, "current_vah",   0.0)
+    val        = getattr(signal, "current_val",   0.0)
+    vpa_ready  = getattr(signal, "vpa_ready", False)
+
+    risk   = abs(signal.entry_price - signal.stop_loss)
+    reward = abs(target - signal.entry_price) if target else 0.0
+    rr_str = f"1:{reward/risk:.1f}" if risk > 0 and reward > 0 else "N/A"
 
     print()
-    print(f"  {color}╔{border}╗{_RESET}")
-    print(f"  {color}║{_RESET}  {icon}  {_BOLD}STRONG BREAKOUT ALERT — {dir_label}  {icon}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}╠{border}╣{_RESET}")
-    print(f"  {color}║{_RESET}  Ticker:         {_BOLD}{_CYAN}{signal.symbol}{_RESET}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Breakout Type:  {signal.breakout_type}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Entry Trigger:  {_BOLD}₹{signal.entry_price}{_RESET}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Stop-Loss:      {_YELLOW}₹{signal.stop_loss}{_RESET}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  WOBI Ratio:     {_BOLD}{signal.obi:+.4f}{_RESET}  {obi_bar}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Bid Qty:        {signal.total_bid_qty:,}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Ask Qty:        {signal.total_ask_qty:,}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Trend (EMA20):  {trend}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}╠{border}╣{_RESET}")
-    print(f"  {color}║{_RESET}  Opening Range:  High=₹{signal.or_high}  Low=₹{signal.or_low}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Candle OHLC:    O=₹{signal.candle_open} H=₹{signal.candle_high} L=₹{signal.candle_low} C=₹{signal.candle_close}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}║{_RESET}  Time:           {signal.timestamp}".ljust(82) + f"{color}║{_RESET}")
-    print(f"  {color}╠{border}╣{_RESET}")
-    print(f"  {color}║{_RESET}  {_YELLOW}⚡ Execute manually on Groww — NO auto-trade ⚡{_RESET}".ljust(90) + f"{color}║{_RESET}")
-    print(f"  {color}╚{border}╝{_RESET}")
+    print(f"  {color}+{border}+{_RESET}")
+    print(f"  {color}|{_RESET}  {icon}  {_BOLD}VPA BREAKOUT ALERT -- {dir_label}  {icon}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Setup:          {_BOLD}{_CYAN}{vpa_type}{_RESET}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}+{border}+{_RESET}")
+    print(f"  {color}|{_RESET}  Ticker:         {_BOLD}{_CYAN}{signal.symbol}{_RESET}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Entry Trigger:  {_BOLD}Rs{signal.entry_price}{_RESET}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  {_GREEN}Target:{_RESET}         {_GREEN}{_BOLD}Rs{target}{_RESET}  (R:R {rr_str})".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  {_RED}Stop-Loss:{_RESET}      {_RED}{_BOLD}Rs{signal.stop_loss}{_RESET}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  WOBI Ratio:     {_BOLD}{signal.obi:+.4f}{_RESET}  {obi_bar}".ljust(90) + f"{color}|{_RESET}")
+    # VPA levels panel
+    if vpa_ready and poc:
+        print(f"  {color}+{border}+{_RESET}")
+        print(f"  {color}|{_RESET}  {_BOLD}--- Volume Profile Levels ---{_RESET}".ljust(90) + f"{color}|{_RESET}")
+        print(f"  {color}|{_RESET}  POC (Fair Value): Rs{poc}".ljust(82) + f"{color}|{_RESET}")
+        print(f"  {color}|{_RESET}  VAH (Value High): {_GREEN}Rs{vah}{_RESET}  <- price ceiling".ljust(90) + f"{color}|{_RESET}")
+        print(f"  {color}|{_RESET}  VAL (Value Low):  {_RED}Rs{val}{_RESET}  <- price floor".ljust(90) + f"{color}|{_RESET}")
+    else:
+        print(f"  {color}+{border}+{_RESET}")
+        print(f"  {color}|{_RESET}  VPA Profile:    Building... (OR fallback active)".ljust(82) + f"{color}|{_RESET}")
+        print(f"  {color}|{_RESET}  Opening Range:  High=Rs{signal.or_high}  Low=Rs{signal.or_low}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}+{border}+{_RESET}")
+    print(f"  {color}|{_RESET}  Bid Qty:        {signal.total_bid_qty:,}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Ask Qty:        {signal.total_ask_qty:,}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Trend (EMA20):  {trend}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Candle OHLC:    O=Rs{signal.candle_open} H=Rs{signal.candle_high} L=Rs{signal.candle_low} C=Rs{signal.candle_close}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}|{_RESET}  Time:           {signal.timestamp}".ljust(82) + f"{color}|{_RESET}")
+    print(f"  {color}+{border}+{_RESET}")
+    print(f"  {color}|{_RESET}  {_YELLOW}Execute manually on Groww -- NO auto-trade{_RESET}".ljust(90) + f"{color}|{_RESET}")
+    print(f"  {color}+{border}+{_RESET}")
     print()
 
 

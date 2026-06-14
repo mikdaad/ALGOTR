@@ -134,10 +134,11 @@ def run_screener_mode():
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_live_mode():
-    """Execute Phase 2 live breakout + tier-weighted OBI engine with HITL Execution Gateway."""
+    """Execute Phase 2+4+5 live breakout + VPA + velocity engine with HITL Execution Gateway."""
     from screener import load_screened_watchlist
     from live_engine import LiveBreakoutEngine
     from alerts import handle_breakout_signal, handle_velocity_signal, CSV_LOG_FILE
+    from volume_profile import handle_vpa_signal
 
     print_banner("LIVE")
 
@@ -198,6 +199,7 @@ def run_live_mode():
         watchlist=watchlist,
         on_signal=handle_breakout_signal,
         on_velocity_signal=handle_velocity_signal,
+        on_vpa_signal=handle_vpa_signal,   # Phase 5: VPA standalone callback signals
     )
 
     try:
@@ -243,9 +245,9 @@ def print_banner(mode: str):
     print()
     print("=" * 70)
     if mode == "SCREENER":
-        print("   🔬 ZERODHA SIGNAL ENGINE v3 — VCP & TREND-ALIGNED SCREENER")
+        print("   ZERODHA SIGNAL ENGINE v5 -- VCP & TREND-ALIGNED SCREENER")
     else:
-        print("   ⚡ ZERODHA SIGNAL ENGINE v3 — BREAKOUT + TIER-WEIGHTED OBI")
+        print("   ZERODHA SIGNAL ENGINE v5 -- VPA BREAKOUT + TIER-WEIGHTED OBI")
     print("=" * 70)
     print(f"   Time:              {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
     if mode == "LIVE":
@@ -255,12 +257,15 @@ def print_banner(mode: str):
         from config import OBI_TIER_WEIGHTS
         print(f"   OBI Tier Weights:  {OBI_TIER_WEIGHTS}")
         print(f"   ──────────────────────────────────────────────────────────────────")
-        print(f"   ⚡ Velocity Scanner: ARMED")
-        print(f"   Price Band:        ₹{VELOCITY_PRICE_MIN:.0f}–₹{VELOCITY_PRICE_MAX:.0f}")
-        print(f"   1m ATR Gate:       ≥ {VELOCITY_ATR_MIN} pts")
-        print(f"   WOBI Velocity:     Bull ≥ {VELOCITY_WOBI_BULL} | Bear ≤ {VELOCITY_WOBI_BEAR}")
-        print(f"   Scalp Target:      ±₹{VELOCITY_SCALP_TARGET:.2f} (R:R = 1:2)")
-        print(f"   Stop-Loss:         ±₹{VELOCITY_STOP_LOSS:.2f}")
+        print(f"   Velocity Scanner: ARMED")
+        print(f"   Price Band:        Rs{VELOCITY_PRICE_MIN:.0f}-Rs{VELOCITY_PRICE_MAX:.0f}")
+        print(f"   1m ATR Gate:       >= {VELOCITY_ATR_MIN} pts")
+        print(f"   WOBI Velocity:     Bull >= {VELOCITY_WOBI_BULL} | Bear <= {VELOCITY_WOBI_BEAR}")
+        print(f"   Scalp Target:      +-Rs{VELOCITY_SCALP_TARGET:.2f} (R:R = 1:2)")
+        print(f"   Stop-Loss:         +-Rs{VELOCITY_STOP_LOSS:.2f}")
+        print(f"   ------")
+        print(f"   StreamingVolumeProfile: ARMED (bin=Rs0.10, 70% VA rule)")
+        print(f"   VPA Setups:        VAH_BREAKOUT | VAL_BREAKDOWN | POC_REJECTION | OR_BREAKOUT")
     print(f"   DB Logging:        {'✅ Enabled' if ENABLE_DB_LOGGING else '❌ Disabled'}")
     print(f"   CSV Signal Log:    triggered_signals.csv")
     print(f"   Market Hours:      {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} – {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} IST")

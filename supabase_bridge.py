@@ -61,7 +61,13 @@ def _get_client():
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _normalize_breakout_signal(signal) -> dict:
-    """Normalize a BreakoutSignal into the trading_signals schema."""
+    """
+    Normalize a BreakoutSignal into the trading_signals schema.
+
+    v5 VPA upgrade: includes current_poc, current_vah, current_val,
+    target_price, and vpa_signal_type so the Next.js dashboard can display
+    institutional liquidity nodes alongside the signal entry/stop levels.
+    """
     return {
         "signal_time": signal.timestamp.isoformat() if hasattr(signal.timestamp, "isoformat")
                        else str(signal.timestamp),
@@ -69,7 +75,7 @@ def _normalize_breakout_signal(signal) -> dict:
         "direction": signal.direction,
         "signal_type": signal.breakout_type,
         "trigger_price": float(signal.entry_price),
-        "target_price": None,
+        "target_price": float(getattr(signal, "target_price", 0.0)) or None,
         "stop_loss": float(signal.stop_loss),
         "wobi_ratio": float(signal.obi),
         "volume_spike": None,
@@ -79,19 +85,31 @@ def _normalize_breakout_signal(signal) -> dict:
         "trend": getattr(signal, "trend", "N/A"),
         "or_high": float(signal.or_high) if signal.or_high else None,
         "or_low": float(signal.or_low) if signal.or_low else None,
+        # ── VPA v5 columns (must exist in Supabase trading_signals table) ──
+        "current_poc": float(getattr(signal, "current_poc", 0.0)) or None,
+        "current_vah": float(getattr(signal, "current_vah", 0.0)) or None,
+        "current_val": float(getattr(signal, "current_val", 0.0)) or None,
+        "vpa_signal_type": getattr(signal, "vpa_signal_type", "") or None,
         "status": "alert_only",
         "metadata": {
             "candle_open": float(signal.candle_open),
             "candle_high": float(signal.candle_high),
             "candle_low": float(signal.candle_low),
             "candle_close": float(signal.candle_close),
+            "vpa_ready": getattr(signal, "vpa_ready", False),
             "token": signal.token,
         },
     }
 
 
 def _normalize_velocity_signal(signal) -> dict:
-    """Normalize a VelocitySignal into the trading_signals schema."""
+    """
+    Normalize a VelocitySignal into the trading_signals schema.
+
+    v5 VPA upgrade: VPA levels are optionally included if the velocity
+    scanner enriches its signals with profile data in a future update.
+    Currently defaults to None for backward compatibility.
+    """
     return {
         "signal_time": signal.timestamp.isoformat() if hasattr(signal.timestamp, "isoformat")
                        else str(signal.timestamp),
@@ -109,6 +127,11 @@ def _normalize_velocity_signal(signal) -> dict:
         "trend": getattr(signal, "trend", "N/A"),
         "or_high": None,
         "or_low": None,
+        # ── VPA v5 columns: velocity signals don't carry VPA data yet ──
+        "current_poc": float(getattr(signal, "current_poc", 0.0)) or None,
+        "current_vah": float(getattr(signal, "current_vah", 0.0)) or None,
+        "current_val": float(getattr(signal, "current_val", 0.0)) or None,
+        "vpa_signal_type": getattr(signal, "vpa_signal_type", "") or None,
         "status": "pending",
         "metadata": {
             "consolidation_high": float(signal.consolidation_high),
