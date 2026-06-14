@@ -1,9 +1,9 @@
-# AWS Deployment Guide — Zerodha Signal Engine
+# AWS Deployment Guide — Zerodha Signal Engine v5 (VPA)
 
 > **Architecture Decision Summary**
 > - **Backend (Python):** EC2 `t3.small` in `ap-south-1` (Mumbai) with Docker + `systemd` (NOT Fargate — see rationale below)
 > - **Frontend (Next.js):** AWS Amplify Hosting (fully managed, zero-config SSR)
-> - **State/Database:** Supabase (remains external — no migration needed)
+> - **State/Database:** Supabase (remains external — VPA schema migration required for v5, see Part 6B)
 
 ---
 
@@ -44,7 +44,7 @@ Every millisecond matters for your 3-point scalp. **Always use Mumbai.**
 1. Go to EC2 → **Launch Instance**
 2. **Name:** `zerodha-signal-engine`
 3. **AMI:** Ubuntu Server 24.04 LTS (HVM), x86_64
-4. **Instance type:** `t3.small` (2 vCPU, 2GB RAM — adequate for Python + Pandas)
+4. **Instance type:** `t3.small` (2 vCPU, 2GB RAM — adequate for Python + Pandas + NumPy VPA arrays)
 5. **Key pair:** Create new → Download the `.pem` file → store it safely
 6. **Network Settings:** Create new Security Group (configured below)
 7. **Storage:** 20 GB gp3 (increase from default 8GB for logs + Docker layers)
@@ -145,7 +145,7 @@ Place this file at the **root** of your project (`d:\CLUSTERS\CODES\zeroda signa
 # ──────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 
-# Install build tools needed for psycopg2 and pandas
+# Install build tools needed for psycopg2, pandas, and numpy
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -247,6 +247,36 @@ export TELEGRAM_CHAT_ID=$(echo $SECRETS | python3 -c "import sys,json; print(jso
 ```
 
 Grant the EC2 instance an IAM Role with `secretsmanager:GetSecretValue` on the specific secret ARN.
+
+---
+
+## PART 6B — Supabase Schema Migration (v5 VPA — REQUIRED)
+
+> [!IMPORTANT]
+> The v5 VPA engine writes `current_poc`, `current_vah`, `current_val`, and `vpa_signal_type` to the `trading_signals` table on every signal. **The live engine will raise a Supabase insert error on the first signal if this migration has not been run.** Complete this step before starting the live engine for the first time after deploying v5.
+
+Run the following in **Supabase → SQL Editor** (safe to re-run — all statements use `IF NOT EXISTS`):
+
+```sql
+-- Add VPA structural level columns
+ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS current_poc      NUMERIC(12, 2) DEFAULT NULL;
+ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS current_vah      NUMERIC(12, 2) DEFAULT NULL;
+ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS current_val      NUMERIC(12, 2) DEFAULT NULL;
+ALTER TABLE trading_signals ADD COLUMN IF NOT EXISTS vpa_signal_type  TEXT           DEFAULT NULL;
+
+-- Optional: Index for dashboard filtering by setup type
+CREATE INDEX IF NOT EXISTS idx_trading_signals_vpa_type
+    ON trading_signals (vpa_signal_type)
+    WHERE vpa_signal_type IS NOT NULL;
+
+-- Verify the migration:
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_name = 'trading_signals'
+  AND column_name IN ('current_poc', 'current_vah', 'current_val', 'vpa_signal_type');
+```
+
+> [!NOTE]
+> The `target_price` column was already present in the original schema (velocity signals used it). It is now also populated by VPA breakout signals — no schema change needed for that column.
 
 ---
 
@@ -591,13 +621,13 @@ sudo amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 \
 aws cloudwatch put-metric-alarm \
   --alarm-name "ZerodhaEngineDown" \
   --alarm-description "Engine container stopped unexpectedly during market hours" \
-  --metric-name "running_task_count" \
-  --namespace "AWS/ECS" \
+  --metric-name "MemoryUsage" \
+  --namespace "CWAgent" \
   --statistic Average \
   --period 60 \
-  --threshold 1 \
-  --comparison-operator LessThanThreshold \
-  --evaluation-periods 2 \
+  --threshold 90 \
+  --comparison-operator GreaterThanThreshold \
+  --evaluation-periods 3 \
   --alarm-actions arn:aws:sns:ap-south-1:XXXX:zerodha-alerts \
   --region ap-south-1
 ```
@@ -618,7 +648,13 @@ SECRETS
   [ ] EC2 IAM Role has secretsmanager:GetSecretValue permission
   [ ] fetch_secrets.sh tested manually
 
+DATABASE MIGRATION (v5 VPA — REQUIRED BEFORE FIRST LIVE RUN)
+  [ ] Supabase SQL Editor: 4 ALTER TABLE statements run (Part 6B)
+  [ ] Verification SELECT confirms all 4 VPA columns exist
+  [ ] target_price column confirmed present (pre-existing)
+
 DOCKER
+  [ ] numpy>=1.26.0 confirmed in requirements.txt
   [ ] Dockerfile added to project root
   [ ] Image builds successfully: docker build -t zerodha-engine:latest .
   [ ] Container runs successfully with test env vars

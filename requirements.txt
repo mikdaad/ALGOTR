@@ -6,6 +6,7 @@
 kiteconnect>=5.0.0          # Zerodha Kite Connect Python SDK
 pandas>=2.0.0               # DataFrame operations
 pandas_ta>=0.3.14b1         # Technical analysis indicators
+numpy>=1.26.0               # StreamingVolumeProfile bin arrays (VPA engine)
 requests>=2.31.0            # HTTP requests (Telegram alerts)
 psycopg2-binary>=2.9.9      # PostgreSQL driver (for Supabase logging)
 pytz>=2024.1                # Timezone handling (IST conversions)
