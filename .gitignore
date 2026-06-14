@@ -1,0 +1,88 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# .gitignore — Zerodha Signal Engine
+# Prevents sensitive files, runtime logs, build artifacts, and local data
+# from being committed to version control.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Python - Cache and Compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Python - Distribution & Packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Python - Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+bin/
+include/
+lib/
+lib64/
+share/
+pyvenv.cfg
+
+# Secrets & Credentials (NEVER commit these)
+.env
+.env.*
+*.env
+access_token.json
+
+# Local / Runtime Data & Outputs
+triggered_signals.csv
+signals_archive_*.csv
+screened_watchlist.json
+
+# Databases & Local Logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Frontend / Node (Sub-project node_modules & build outputs)
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/build/
+dashboard/*.tsbuildinfo
+dashboard/next-env.d.ts
+dashboard/.env*.local
