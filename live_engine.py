@@ -550,6 +550,10 @@ class LiveBreakoutEngine:
         close  = candle.close
         signal = None
 
+        # Compute breakout booleans (requires OR to be fully set)
+        bull_breakout = orng.is_set and close > orng.high
+        bear_breakout = orng.is_set and close < orng.low
+
         if bull_breakout and obi >= OBI_BULL_THRESHOLD:
             signal = BreakoutSignal(
                 symbol=symbol, token=token,
